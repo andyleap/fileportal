@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"os"
 	"time"
@@ -23,15 +24,23 @@ func main() {
 
 	if *Input != "" {
 		fileL, _ := net.Listen("tcp", ":0")
-		addr := fileL.Addr().String()
+		port := fileL.Addr().(*net.TCPAddr).Port
+		addrs, _ := net.InterfaceAddrs()
 		beacon := time.NewTicker(1 * time.Second)
 		go func() {
+
 			udpAddr, _ := net.ResolveUDPAddr("udp4", ":6534")
 			broadcast, _ := net.ResolveUDPAddr("udp4", "255.255.255.255:6534")
 			c, _ := net.ListenUDP("udp4", udpAddr)
 			defer c.Close()
 			for range beacon.C {
+				if len(addrs) == 0 {
+					addrs, _ = net.InterfaceAddrs()
+				}
+
+				addr := (&net.TCPAddr{IP: addrs[0].(*net.IPAddr).IP, Zone: addrs[0].(*net.IPAddr).Zone, Port: port}).String()
 				c.WriteToUDP([]byte(addr), broadcast)
+				addrs = addrs[1:]
 			}
 		}()
 
@@ -55,12 +64,15 @@ func main() {
 		for {
 			buf := make([]byte, 1500)
 
-			n, _ := l.Read(buf)
+			n, _, _ := l.ReadFromUDP(buf)
+
+			log.Println("Message: ", string(buf[:n]))
 
 			addr := string(buf[:n])
 			var err error
 			c, err = net.Dial("tcp", addr)
 			if err != nil {
+				log.Println("Dial error: ", err)
 				continue
 			}
 			break
