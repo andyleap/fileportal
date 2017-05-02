@@ -38,7 +38,7 @@ func main() {
 					addrs, _ = net.InterfaceAddrs()
 				}
 
-				addr := (&net.TCPAddr{IP: addrs[0].(*net.IPAddr).IP, Zone: addrs[0].(*net.IPAddr).Zone, Port: port}).String()
+				addr := (&net.TCPAddr{IP: addrs[0].(*net.IPNet).IP, Port: port}).String()
 				c.WriteToUDP([]byte(addr), broadcast)
 				addrs = addrs[1:]
 			}
