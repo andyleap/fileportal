@@ -2,8 +2,8 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
-	"fmt"
 	"io"
 	"log"
 	"net"
@@ -12,73 +12,89 @@ import (
 )
 
 var Input = flag.String("i", "", "Input File")
-var Output = flag.String("o", "", "Output File")
+
+type FileData struct {
+	Name string
+	Size int64
+	Port int
+}
 
 func main() {
 	flag.Parse()
 
-	if *Input != "" && *Output != "" {
-		fmt.Println("You can only specify an input OR an output, not both!")
-		os.Exit(0)
-	}
-
 	if *Input != "" {
-		fileL, _ := net.Listen("tcp", ":0")
+		f, err := os.Open(*Input)
+		if err != nil {
+			log.Fatalf("Error opening input file: %s", err)
+		}
+
+		fileL, err := net.Listen("tcp", ":0")
+		if err != nil {
+			log.Fatalf("Error opening tcp server: %s", err)
+		}
+
 		port := fileL.Addr().(*net.TCPAddr).Port
-		addrs, _ := net.InterfaceAddrs()
+
+		info, err := f.Stat()
+		if err != nil {
+			log.Fatalf("Error stat'ing input file: %s", err)
+		}
+
+		fileData := FileData{}
+		fileData.Name = info.Name()
+		fileData.Size = info.Size()
+		fileData.Port = port
+
+		filePacket, _ := json.Marshal(fileData)
+
 		beacon := time.NewTicker(1 * time.Second)
 		go func() {
-
-			udpAddr, _ := net.ResolveUDPAddr("udp4", ":6534")
+			udpAddr, _ := net.ResolveUDPAddr("udp4", ":0")
 			broadcast, _ := net.ResolveUDPAddr("udp4", "255.255.255.255:6534")
 			c, _ := net.ListenUDP("udp4", udpAddr)
 			defer c.Close()
 			for range beacon.C {
-				if len(addrs) == 0 {
-					addrs, _ = net.InterfaceAddrs()
-				}
-
-				addr := (&net.TCPAddr{IP: addrs[0].(*net.IPNet).IP, Port: port}).String()
-				c.WriteToUDP([]byte(addr), broadcast)
-				addrs = addrs[1:]
+				c.WriteToUDP(filePacket, broadcast)
 			}
 		}()
 
 		c, _ := fileL.Accept()
 		fileL.Close()
 
-		beacon.Stop()
+		log.Printf("Client connected: %s", c.RemoteAddr())
 
-		f, _ := os.Open(*Input)
+		beacon.Stop()
 
 		io.Copy(c, f)
 
 		c.Close()
 		f.Close()
 
-	} else if *Output != "" {
+	} else {
 		udpAddr, _ := net.ResolveUDPAddr("udp4", ":6534")
 		l, _ := net.ListenUDP("udp4", udpAddr)
 
 		var c net.Conn
+		fileData := FileData{}
+
 		for {
 			buf := make([]byte, 1500)
 
-			n, _, _ := l.ReadFromUDP(buf)
+			n, addr, _ := l.ReadFromUDP(buf)
 
-			log.Println("Message: ", string(buf[:n]))
-
-			addr := string(buf[:n])
-			var err error
-			c, err = net.Dial("tcp", addr)
+			err := json.Unmarshal(buf[:n], &fileData)
 			if err != nil {
-				log.Println("Dial error: ", err)
 				continue
 			}
-			break
+
+			c, err = net.Dial("tcp", (&net.TCPAddr{IP: addr.IP, Port: fileData.Port}).String())
+			if err == nil {
+				log.Printf("Connected to client, downloading file: %s", fileData.Name)
+				break
+			}
 		}
 
-		f, _ := os.Create(*Output)
+		f, _ := os.Create(fileData.Name)
 
 		io.Copy(f, c)
 
